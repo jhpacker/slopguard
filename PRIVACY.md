@@ -32,6 +32,13 @@ pages you visit, or the results. Image bytes are read in memory, analyzed, and
 discarded; they are never uploaded, logged, or transmitted to the developer or any
 external service.
 
+These image fetches include your browser's existing cookies for that image host
+(the request is made with credentials), exactly as the page's own image load does.
+This is what lets SlopGuard retrieve images that are only visible while you are
+logged in (for example on social networks). The extension never reads, stores, or
+transmits the contents of those cookies — the browser simply attaches them to the
+request to the image's own host, the same way it does for any normal page load.
+
 ## Page Actions
 
 SlopGuard only acts when you explicitly ask it to. It does **not** scan pages
@@ -51,15 +58,20 @@ This content is processed locally and never leaves your device.
 
 The extension requests only what it needs to scan images on the page you are on:
 
-- `host_permissions: <all_urls>` and the content script — to read `<img>` elements
-  and fetch their bytes for analysis on whatever page you choose to scan. These run
-  only in response to your action (toolbar click or right-click), not passively.
+- `host_permissions: <all_urls>` — to fetch image bytes from whatever site hosts
+  the images on the page you choose to scan. Images are served from many different
+  domains, so this access cannot be limited to a fixed list. It is used only to
+  retrieve images for analysis, only in response to your action.
+- `scripting` — to inject the scanning logic into a tab **only** when you invoke the
+  extension on that tab (toolbar click or right-click). The extension does not run a
+  content script on pages automatically; nothing is injected until you act.
 - `storage` — to remember the single Debug-mode setting.
 - `contextMenus` — for the right-click "Check this image for AI" option.
 - `offscreen` — to run the WebAssembly (C2PA) and ONNX inference off the service
   worker.
 
-Notably absent: analytics, telemetry, remote servers, access to your browsing
-history or cookies, and any user-supplied or developer-supplied API keys.
+Notably absent: analytics, telemetry, remote/developer-controlled servers, any
+reading or storing of your cookies or browsing history, and any user-supplied or
+developer-supplied API keys.
 
 **Contact**: jason@quantable.com or the GitHub repository issue tracker.
