@@ -107,9 +107,24 @@
   width: 100%;
 }
 
+/* Page CSS (e.g. Reddit) styles bare <table>/<tr>/<td> — zebra-striping via
+   tr:nth-child(even), backgrounds, shadows — and because our overlay uses real
+   table elements those rules bleed in. nth-child striping has the same
+   specificity as ours, so !important is needed to win the background. */
+.slopguard-debug-table,
+.slopguard-debug-table tbody,
+.slopguard-debug-table tr,
 .slopguard-debug-table td {
+  background: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.slopguard-debug-table td {
+  color: #fff;
   padding: 2px 6px;
   vertical-align: top;
+  border: 0;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 

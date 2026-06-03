@@ -112,7 +112,7 @@ const VISUAL_MODELS = [
     outputName: 'logits',
     interpret: (tensor) => softmaxBinary(tensor, 1),
     threshold: 0.7,
-    confidentThreshold: 0.85,
+    confidentThreshold: 0.9,
   },
 ];
 
