@@ -85,6 +85,15 @@ The zip is dominated by:
   `executionProviders: ['wasm']`). Dropped the `jsep`, `asyncify`, and `jspi`
   variants, reclaiming ~64M. Re-add `.jsep.{wasm,mjs}` if ever switching to the
   webgpu EP.
+  - **REQUIRED paired change (regression fixed 2026-06-03):** the default
+    `import ... from 'onnxruntime-web'` resolves to the unified **jsep** bundle,
+    which loads `ort-wasm-simd-threaded.jsep.wasm` at runtime *even under the
+    `wasm` EP* — so trimming the jsep wasm made `InferenceSession.create` 404 and
+    every visual/SynthID model errored (`*=err`) in-browser. (Node didn't catch
+    it: it resolves wasm from `node_modules/`, where all variants still exist.)
+    Fix: `src/offscreen.js` now imports from **`onnxruntime-web/wasm`** (the
+    wasm-only bundle, which requests the plain artifact we ship). If you ever
+    re-add the jsep wasm for WebGPU, switch this import back to the default entry.
 
 ## Misc cleanup
 

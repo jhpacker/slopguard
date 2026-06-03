@@ -1,5 +1,12 @@
 import { createC2pa } from 'c2pa';
-import * as ort from 'onnxruntime-web';
+// Use the wasm-only bundle, NOT the default `onnxruntime-web` entry. The default
+// resolves to the unified *jsep* (CPU+WebGPU) bundle, which loads
+// `ort-wasm-simd-threaded.jsep.wasm` even under `executionProviders:['wasm']`.
+// build.js intentionally ships only the plain `ort-wasm-simd-threaded.{wasm,mjs}`
+// (the jsep/asyncify/jspi variants are ~64M of dead weight, dropped for package
+// size), so the default bundle 404s on its wasm at runtime → InferenceSession
+// fails. The `/wasm` entry loads the plain artifact we actually ship.
+import * as ort from 'onnxruntime-web/wasm';
 import { buildSynthIdInput, SYNTHID_SIZE } from './synthid-preprocess.js';
 
 const TAG = '[SlopGuard off]';
@@ -316,7 +323,7 @@ async function handleVisualDetect(url) {
   dlog(`${TAG} tier5 [visual] inference done in ${(performance.now() - tInfer).toFixed(0)}ms (total ${(performance.now() - t0).toFixed(0)}ms)`);
 
   const summary = results
-    .map((r) => (r.error ? `${r.name}=err` : `${r.name}=${(r.probAI * 100).toFixed(1)}%`))
+    .map((r) => (r.error ? `${r.name}=err: ${r.error}` : `${r.name}=${(r.probAI * 100).toFixed(1)}%`))
     .join('\n');
 
   if (results.every((r) => r.error)) {
