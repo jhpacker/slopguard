@@ -68,12 +68,12 @@
   border-color: #ff3b30;
 }
 
-/* "Probably AI" — visual classifier with high confidence (P ≥ 50%).
-   Yellow, not red: pixel statistics are less authoritative than declared
-   metadata, so it never gets the red "AI" treatment. */
+/* "Probably AI" — visual classifier with high confidence (P ≥ 50%). Red,
+   same as declared-metadata: a confident pixel-classifier hit reads as a
+   strong AI call to the user. */
 .slopguard-label--visual-high {
-  color: #ffcc00;
-  border-color: #ffcc00;
+  color: #ff3b30;
+  border-color: #ff3b30;
 }
 
 /* "Maybe AI" — visual classifier with low confidence (10% ≤ P < 50%) */

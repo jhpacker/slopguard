@@ -398,10 +398,18 @@ async function handleDetect(url) {
                 ? action.softwareAgent
                 : action.softwareAgent.name)
             : null;
+          // Pick the most descriptive source name. claimGenerator is often
+          // empty on the ingredient manifest that actually carries the AI
+          // assertion (e.g. Google: the action holds a human-readable
+          // `description` like "Created by Google Generative AI." instead).
+          // Fall back agent → description before settling for "unknown".
+          const named = generator !== 'unknown'
+            ? `${generator}${agent ? ` / ${agent}` : ''}`
+            : (agent || action.description || generator);
           return {
             ai: true,
             reason: 'c2pa',
-            detail: `${generator}${agent ? ` / ${agent}` : ''} (${dstShort})`,
+            detail: `${named} (${dstShort})`,
             parsed: true,
             validation: store.validationStatus,
           };

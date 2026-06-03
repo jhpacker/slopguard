@@ -2,9 +2,14 @@
 
 A Chrome extension that detects AI-generated images on web pages and visually flags them. Built as a personal experiment, not a polished product.
 
-When you click the toolbar icon (red **AI?** button) on any page, SlopGuard runs every eligible image (rendered area ≥ ~200×200 px) through a multi-tier detection pipeline. AI-flagged images get a red **AI** / **Probably AI** / yellow **Maybe AI** label and are dimmed to grayscale; checked-clean images get a thin green outline; failed checks get a grey outline.
+When you click the toolbar icon (the six-finger hand icon) on any page, SlopGuard runs every eligible image (rendered area ≥ ~200×200 px) through a multi-tier detection pipeline. AI-flagged images get a red **AI** / **Probably AI** / yellow **Maybe AI** label and are dimmed to grayscale; checked-clean images get a thin green outline; failed checks get a grey outline.
 
 **Everything runs locally** — no remote API calls, no user-supplied keys. That's a deliberate constraint.
+
+The two on-device ONNX detectors are based upon others' work, so thanks are due to:
+**Victor Livernoche @ ComplexDataLab**'s [OpenFake](https://github.com/vicliv/OpenFake) project for the general classifier.
+
+**fyxme**'s [`fyxme/opensynthid-detect-0.1`](https://huggingface.co/fyxme/opensynthid-detect-0.1) local SynthID surrogate. 
 
 ## Detection pipeline
 
@@ -13,10 +18,10 @@ When you click the toolbar icon (red **AI?** button) on any page, SlopGuard runs
 | 1 | **C2PA manifest** (c2pa-js, ignores cert validation) | `c2pa.actions(.v2)` assertions with a `digitalSourceType` of `trainedAlgorithmicMedia` etc., walking the **whole** manifest chain (the AI marker usually lives on an ingredient/parent manifest, not the active one) | ✅ active |
 | 2 | **EXIF/IPTC/XMP attribution** (exifr) | Artist / Author / Credit / Source values matching AI patterns (`"ai"`, `"AI Generated"`, etc.) | ✅ active |
 | 3 | **Byte scan** (regex over latin1-decoded bytes) | DigitalSourceType URL strings, known AI agent names (Midjourney, ChatGPT, Adobe_Firefly, Microsoft Responsible AI, Google C2PA, ...), generation params (`Sampler:`, `CFG scale:`, `civitai`, `ComfyUI`, `txt2img`, ...) | ✅ active |
-| 4 | **SynthID watermark surrogate** (OpenSynthID ONNX, onnxruntime-web) | The Google **SynthID** watermark directly in the pixels — a reverse-engineered surrogate ([`fyxme/opensynthid-detect-0.1`](https://huggingface.co/fyxme/opensynthid-detect-0.1)). Catches metadata-stripped Imagen / Gemini / Nano-Banana. **Google-only.** | ✅ active |
+| 4 | **SynthID watermark surrogate** (OpenSynthID ONNX, onnxruntime-web) | The Google **SynthID** watermark directly in the pixels — a reverse-engineered surrogate ([`fyxme/opensynthid-detect-0.1`](https://huggingface.co/fyxme/opensynthid-detect-0.1)). Catches metadata-stripped Imagen / Gemini / Nano-Banana. ✅ active |
 | 4a | **Visible watermark template matching** | Was OpenCV-based NCC against `templates/`; OpenCV.js + MV3 CSP are incompatible, and the eval of an alternative NCC port found it redundant with tier 4. | ⚠️ disabled |
-| 5 | **Visual classifier** (OpenFake SwinV2 ONNX, onnxruntime-web) | General "does this look AI-generated" — a SwinV2 real/fake detector ([`ComplexDataLab/OpenFakeDemo`](https://huggingface.co/spaces/ComplexDataLab/OpenFakeDemo)) at 256×256. The original 3-model ensemble (Organika + 2× SigLIP) was disabled for real-world false positives; OpenFake is a single-model replacement on trial. | 🧪 trialing |
-| 6 | **LLM vision judge** (Chrome built-in Gemini Nano) | Reasons over pixels for AI tell-tales. Disabled: the verdict was driven by prompt framing rather than the image, and it's slow (~1–3 s/image). | ⚠️ disabled |
+| 5 | **Visual classifier** (OpenFake SwinV2 ONNX, onnxruntime-web) | General "does this look AI-generated" — a SwinV2 real/fake detector ([`ComplexDataLab/OpenFakeDemo`](https://huggingface.co/spaces/ComplexDataLab/OpenFakeDemo)) at 256×256. The original 3-model ensemble (Organika + 2× SigLIP) was disabled for real-world false positives; OpenFake is a single-model replacement on trial. | ✅ active |
+
 
 **Tiers 1–4 short-circuit on hit.** Tiers 1–3 are declared signals (the file literally claims it's AI); tier 4 reads the SynthID watermark, treated as strong provenance. All four produce the red **AI** label.
 
@@ -69,9 +74,11 @@ The Options page (right-click toolbar icon → **Options**) has one setting:
 
 ## Limitations (be aware)
 
-- **SynthID detection uses an unvalidated community surrogate.** Google's official SynthID Detector is not publicly available. Tier 4 uses `fyxme/opensynthid-detect-0.1`, a reverse-engineered surrogate (v0.1, author discloses it's unvalidated). It's **Google-only** — it won't flag FLUX / Midjourney / Stable Diffusion / GPT-image, which carry no SynthID watermark — and its real-photo false-positive rate at scale is unmeasured.
+- **SynthID detection uses an unvalidated community surrogate.** Google's official SynthID Detector is not publicly available. Tier 4 uses `fyxme/opensynthid-detect-0.1`, a reverse-engineered surrogate (v0.1, author discloses it's unvalidated).
+
+> **SynthID** is a watermarking technology developed by [Google DeepMind](https://deepmind.google/models/synthid/). SlopGuard is not affiliated with, endorsed by, or connected to Google or DeepMind. Tier 4 does not use Google's SynthID software; it relies on `fyxme/opensynthid-detect-0.1`, an independent third-party model that attempts to *detect* the watermark's statistical signature. "SynthID" is used here for identification and descriptive purposes only.
 - **Grok metadata is stripped.** Real Grok images carry no metadata, so tiers 1–3 can't catch them. The tier-5 classifier catches some.
-- **Pixel-based detectors miss frontier generators.** FLUX 1.1, Imagen 3, Midjourney v6+ images often slip past the visual classifier, especially after social-media re-encoding. Semantic AI tells (garbled text, weird anatomy) live at higher resolution than the model input.
+
 - **No background-image detection.** Only `<img>` elements are scanned. Sites that render images via CSS `background-image` (some Twitter cards) won't be caught.
 - **C2PA signature validation is not performed** — we trust the manifest contents. False-positive risk is low because the strings we look for (e.g. `trainedAlgorithmicMedia`) are AI-specific.
 
@@ -140,7 +147,4 @@ inventory and required attributions are in
 
 > ⚠️ **The bundled distribution is NonCommercial.** OpenFake's CC BY-NC 4.0 term
 > applies to any build that includes the OpenFake model, so the bundle as shipped
-> **may not be used commercially**. CC BY-NC has no ShareAlike clause, so it does
-> not affect SlopGuard's own GPL license. To use SlopGuard commercially, remove
-> the OpenFake model (disable tier 5) — the remaining code (GPL), OpenSynthID
-> (Apache-2.0), and MIT libraries carry no commercial restriction.
+> **may not be used commercially**.
