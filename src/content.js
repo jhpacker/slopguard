@@ -1,3 +1,14 @@
+// Re-injection guard. background.js injects this file via chrome.scripting on
+// every toolbar/context-menu invocation (no static content_scripts auto-inject
+// anymore). The first injection
+// registers the message + contextmenu listeners and observers; later injections
+// must NOT re-register them. The listeners from the first load persist and still
+// receive scan-now / check-one, so a repeat injection just no-ops here.
+if (window.__slopguardLoaded) {
+  // already injected on this page
+} else {
+  window.__slopguardLoaded = true;
+
 const MIN_AREA = 40000; // ~200 × 200 rendered px
 const TAG = '[SlopGuard]';
 
@@ -579,3 +590,5 @@ observer.observe(document.documentElement, {
   attributes: true,
   attributeFilter: ['src'],
 });
+
+} // end re-injection guard

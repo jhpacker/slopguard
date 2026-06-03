@@ -3,7 +3,7 @@
   "name": "SlopGuard",
   "version": "0.4.0",
   "description": "Detects AI-generated images on web pages via metadata, C2PA provenance, a SynthID watermark detector, and a visual classifier.",
-  "permissions": ["offscreen", "storage", "contextMenus"],
+  "permissions": ["offscreen", "storage", "contextMenus", "scripting"],
   "host_permissions": ["<all_urls>"],
   "icons": {
     "16": "dist/icons/icon-16.png",
@@ -29,19 +29,5 @@
   "background": {
     "service_worker": "dist/background.js",
     "type": "module"
-  },
-  "web_accessible_resources": [
-    {
-      "resources": ["dist/toolkit_bg.wasm", "dist/c2pa.worker.min.js"],
-      "matches": ["<all_urls>"]
-    }
-  ],
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["dist/content.js"],
-      "css": ["dist/overlay.css"],
-      "run_at": "document_idle"
-    }
-  ]
+  }
 }

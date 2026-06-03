@@ -17,69 +17,66 @@ for the deeper architectural context.
   `manifest.json` + `dist/`, stripping source maps, `sourceMappingURL` comments,
   and `.DS_Store`. Output: `build/slopguard-<version>.zip`.
 
-### ⬜ Narrow host permissions: `<all_urls>` → `activeTab` + `scripting` (RECOMMENDED before submit)
+### ✅ Done (partial) — On-demand injection; `<all_urls>` host_permissions retained by necessity
 
-**Why:** Today `manifest.json` declares `host_permissions: ["<all_urls>"]` *and* a
-content script auto-injected into every page (`matches: ["<all_urls>"]`,
-`run_at: document_idle`). Combined with credentialed cross-origin image fetches
-(`credentials: 'include'`), this is the broadest possible privilege and the thing
-CWS review scrutinizes most. The extension only ever acts on an explicit user
-gesture (toolbar click or right-click menu), so the standing all-pages access
-isn't actually needed.
+**What shipped:** removed the static `content_scripts` auto-injection (the biggest
+CWS scrutiny point — code running on every page at `document_idle`) and switched to
+**on-demand injection via `chrome.scripting`**. The content script now loads only
+into the tab the user explicitly invokes (toolbar click or right-click), not every
+page in the background.
 
-**Target model:** inject the content script on demand, only into the tab the user
-invoked, using `activeTab` + `chrome.scripting`.
+- **manifest.json:** removed the `content_scripts` block; added `"scripting"` to
+  `permissions`. **Kept `host_permissions: ["<all_urls>"]`** (see below).
+- **background.js:** new `ensureInjected(tabId, frameId)` helper does
+  `insertCSS` + `executeScript` of `dist/overlay.css` / `dist/content.js`. Both the
+  `action.onClicked` (toolbar → `scan-now`) and `contextMenus.onClicked`
+  (right-click → `check-one`, into `info.frameId`) paths inject before messaging.
+- **content.js:** top-level `window.__slopguardLoaded` guard wraps the whole IIFE so
+  a repeat injection no-ops (listeners/observers from the first load persist and
+  still receive `scan-now`/`check-one`).
 
-**What the refactor requires:**
-1. **manifest.json**
-   - Replace `host_permissions: ["<all_urls>"]` with `"activeTab"` and
-     `"scripting"` in `permissions`.
-   - Remove the static `content_scripts` block entirely (no more auto-injection).
-   - Keep `offscreen`, `storage`, `contextMenus`.
-   - Likely drop `web_accessible_resources` too (see next item) — c2pa runs in the
-     offscreen doc, not in page context.
-2. **background.js — toolbar path:** in `chrome.action.onClicked`, instead of
-   `chrome.tabs.sendMessage(tab.id, {type:'scan-now'})`, first
-   `chrome.scripting.executeScript({ target: { tabId }, files: ['dist/content.js'] })`
-   and `chrome.scripting.insertCSS({ target: { tabId }, files: ['dist/overlay.css'] })`,
-   then send `scan-now`. Guard against double-injection (executeScript is
-   idempotent enough, or set a `window.__slopguard` sentinel in content.js).
-3. **background.js — context-menu path:** same thing — the `contextMenus.onClicked`
-   handler must `executeScript`/`insertCSS` into `tab.id`/`info.frameId` before
-   sending `check-one`. `activeTab` grants access because the right-click is a
-   user gesture on that tab.
-4. **content.js:** must tolerate being injected after `document_idle` / multiple
-   times. It already guards most state; add a top-level "already loaded" check so a
-   second injection doesn't re-register listeners/observers. The `MutationObserver`
-   for SPA nav + infinite scroll still works once injected.
-5. **Credentialed fetches:** `credentials: 'include'` on image fetches
-   (`background.js` `fetchBytes`, `offscreen.js` ×3) stays functionally the same,
-   but under `activeTab` the host access is scoped to the active tab's origin at
-   invocation time. Re-test auth-gated images (Twitter/X, Reddit) after the change.
+**Why `<all_urls>` host_permissions was NOT dropped (plan revised):** the original
+plan was `<all_urls>` → `activeTab`. That doesn't work. The core detection fetches
+image bytes **cross-origin from the service worker** (`fetchBytes`) and **offscreen
+doc** (×3), to arbitrary image CDNs (pbs.twimg.com, i.redd.it, …), with
+`credentials: 'include'`. In MV3 those cross-origin fetches are CORS-gated and
+`host_permissions` is what grants the bypass. `activeTab` only grants temporary
+access to the **active tab's own origin** — not the third-party CDN origins where
+the images live — so `activeTab`-only would break byte-fetching for most real-world
+images. Decision (2026-06-03): keep `<all_urls>` host_permissions (also authorizes
+the on-demand `scripting` injections, making `activeTab` redundant). The remaining
+CWS justification is "needs to fetch image bytes from any origin to analyze them,"
+which is honest and defensible.
 
-**Trade-off:** loses passive/automatic scanning (already not a feature — scanning
-is click-triggered), in exchange for a far easier permission justification and much
-smaller blast radius. Re-test SPA navigation + infinite scroll, since the content
-script now arrives later in the page lifecycle.
+**In-browser re-testing: ✅ confirmed working (2026-06-03)** — toolbar scan, SPA
+nav + infinite scroll (content.js now arrives post-click instead of at
+`document_idle`), first-right-click single-image check (resolves via the `srcUrl`
+fallback in `findImageForCheck` that first time, since the capture-phase
+`contextmenu` listener isn't present until after the first menu click injects
+content.js), and auth-gated image fetches (Twitter/X, Reddit — unchanged,
+`<all_urls>` retained).
 
-### ⬜ Remove (or narrow) `web_accessible_resources`
-`manifest.json` exposes `toolkit_bg.wasm` + `c2pa.worker.min.js` to `<all_urls>`,
-which lets any site fingerprint the extension via its (post-publish stable) ID.
-c2pa now runs in the offscreen document (extension origin) and spawns same-origin
-workers, so WAR is probably unnecessary. Test removing the block entirely; if c2pa
-breaks, narrow `matches` rather than reverting to `<all_urls>`.
+### ✅ Done — Removed `web_accessible_resources`
+`manifest.json` previously exposed `toolkit_bg.wasm` + `c2pa.worker.min.js` to
+`<all_urls>`, which let any site fingerprint the extension via its (post-publish
+stable) ID. The whole WAR block is now **deleted**. c2pa runs in the offscreen
+document (extension origin) and spawns same-origin workers, so it loads its WASM +
+worker via `chrome.runtime.getURL` without needing WAR — same access pattern as the
+ORT WASM files, which were never in WAR. Confirmed c2pa detection still works
+in-browser after removal.
 
 ## Package size (heavy, but under CWS's 2GB cap)
 
 The zip is dominated by:
-- **OpenFake model — 352M** (fp32 SwinV2, the tier-5 *trial* model). If the trial
-  doesn't pan out (same real-world FP problem that killed the original three),
-  dropping it reclaims most of the package. **Staying fp32 by decision** —
-  quantizing was considered and rejected: fp16 gives no runtime win on the `wasm`
-  EP (no native fp16 kernels → Cast-to-fp32 at inference, possibly *slower*) and
-  int8 risks accuracy drift on a SwinV2 transformer, which would confound the
-  trial's whole purpose (measuring real-world FP rate). Runtime speed matters
-  more to users than package size here.
+- **OpenFake model — 352M** (fp32 SwinV2, the tier-5 model). **Trial passed
+  (2026-06-03)** — real-world FP rate held up (unlike the original three classifiers
+  that were disabled), so it's staying as the active tier-5 detector and is no
+  longer at risk of removal. **Staying fp32 by decision** — quantizing was
+  considered and rejected: fp16 gives no runtime win on the `wasm` EP (no native
+  fp16 kernels → Cast-to-fp32 at inference, possibly *slower*) and int8 risks
+  accuracy drift on a SwinV2 transformer. Runtime speed matters more to users than
+  package size here. This is the single biggest contributor to zip size, but it's a
+  load-bearing model now, not trimmable.
 - ~~**4 ORT WASM variants — ~75M**~~ ✅ **Done.** `build.js` now copies only the
   plain `ort-wasm-simd-threaded.{wasm,mjs}` (the one EP actually instantiated,
   `executionProviders: ['wasm']`). Dropped the `jsep`, `asyncify`, and `jspi`

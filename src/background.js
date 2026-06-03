@@ -33,9 +33,33 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
+// The content script is no longer auto-injected on every page (the static
+// content_scripts block was removed to shrink the attack surface CWS scrutinizes).
+// Instead we inject it on demand via `chrome.scripting` into the tab the user
+// invoked. `<all_urls>` host_permissions is retained — it's required for the
+// cross-origin credentialed image-byte fetches in fetchBytes/offscreen, which
+// activeTab cannot cover — and it also authorizes these injections.
+// content.js guards against double-injection, so re-injecting on a repeat click
+// is harmless.
+async function ensureInjected(tabId, frameId) {
+  const target = frameId != null ? { tabId, frameIds: [frameId] } : { tabId };
+  // Probe first: if content.js is already present, skip re-injection. Re-running
+  // executeScript would no-op via content.js's __slopguardLoaded guard, but
+  // insertCSS has no such guard and would stack a duplicate (identical)
+  // stylesheet on every repeat click.
+  const [probe] = await chrome.scripting.executeScript({
+    target,
+    func: () => !!window.__slopguardLoaded,
+  });
+  if (probe?.result) return;
+  await chrome.scripting.insertCSS({ target, files: ['dist/overlay.css'] });
+  await chrome.scripting.executeScript({ target, files: ['dist/content.js'] });
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.id) return;
   try {
+    await ensureInjected(tab.id);
     await chrome.tabs.sendMessage(tab.id, { type: 'scan-now' });
     dlog(`${TAG} sent scan-now to tab`, tab.id);
   } catch (e) {
@@ -59,6 +83,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== CHECK_ONE_MENU_ID || !tab?.id) return;
   try {
     // frameId targets the exact frame the image lives in (handles iframes).
+    // Inject into that frame first so content.js is present to receive check-one.
+    await ensureInjected(tab.id, info.frameId);
     await chrome.tabs.sendMessage(
       tab.id,
       { type: 'check-one', srcUrl: info.srcUrl },
