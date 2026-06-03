@@ -1,0 +1,37 @@
+SlopGuard
+Copyright (C) 2026 Quantable LLC <jason@quantable.com>
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the LICENSE file for the full text.
+
+This product bundles third-party models and libraries under their own licenses.
+A full inventory is in THIRD-PARTY-LICENSES.md. Attribution notices that those
+licenses require are reproduced below.
+
+-------------------------------------------------------------------------------
+OpenSynthID (tier 4 — SynthID watermark surrogate)
+-------------------------------------------------------------------------------
+Source:  fyxme/opensynthid-detect-0.1
+         https://huggingface.co/fyxme/opensynthid-detect-0.1
+License: Apache License, Version 2.0
+         http://www.apache.org/licenses/LICENSE-2.0
+
+The OpenSynthID checkpoint is used under the Apache License 2.0. It was modified
+for this project: the source .pt checkpoint was exported to ONNX with the sigmoid
+fused into the graph (see convert_model.py --opensynthid). The upstream project
+did not include a NOTICE file.
+
+-------------------------------------------------------------------------------
+OpenFake (tier 5 — SwinV2 AI-image detector)
+-------------------------------------------------------------------------------
+Project: OpenFake — https://github.com/vicliv/OpenFake
+Weights: ComplexDataLab/OpenFakeDemo (Hugging Face Space)
+License: Creative Commons Attribution-NonCommercial 4.0 International
+         (CC BY-NC 4.0) — https://creativecommons.org/licenses/by-nc/4.0/
+
+The OpenFake model is used under CC BY-NC 4.0 and was modified for this project
+(rebuilt base SwinV2 + 2-class head, exported to ONNX; see convert_model.py
+--openfake). Its NonCommercial term applies to any distribution that bundles the
+model. See THIRD-PARTY-LICENSES.md for details.

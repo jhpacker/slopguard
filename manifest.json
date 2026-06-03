@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "SlopGuard",
+  "version": "0.4.0",
+  "description": "Detects AI-generated images on web pages via metadata, C2PA provenance, a SynthID watermark detector, and a visual classifier.",
+  "permissions": ["offscreen", "storage", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "icons": {
+    "16": "dist/icons/icon-16.png",
+    "48": "dist/icons/icon-48.png",
+    "128": "dist/icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Click to scan this page for AI-generated images",
+    "default_icon": {
+      "16": "dist/icons/icon-16.png",
+      "32": "dist/icons/icon-32.png",
+      "48": "dist/icons/icon-48.png",
+      "128": "dist/icons/icon-128.png"
+    }
+  },
+  "options_ui": {
+    "page": "dist/options.html",
+    "open_in_tab": false
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/toolkit_bg.wasm", "dist/c2pa.worker.min.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "css": ["dist/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

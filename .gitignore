@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+CLAUDE.md
+.claude/
+.DS_Store
+models/
+*.log
+__pycache__/
+*.pyc
+convert-venv/
+.venv/
+.venv-convert/
+attic/
+test-images/
+test-images.html
+
