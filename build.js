@@ -57,10 +57,12 @@ if (watch) {
 }
 
 // Only the plain SIMD+threaded WASM build is used at runtime — offscreen.js
-// instantiates ORT with `executionProviders: ['wasm']`. The jsep (WebGPU/WebNN),
-// asyncify, and jspi (proxy/async) variants are ~64M of dead weight, so they're
-// not copied. If you ever switch to the webgpu EP, re-add ort-wasm-simd-threaded
-// .jsep.{wasm,mjs}.
+// imports `onnxruntime-web/wasm` and instantiates with `executionProviders:
+// ['wasm']`. The jsep (WebGPU/WebNN), asyncify, and jspi variants are ~64M of
+// dead weight, so they're not copied. (A WebGPU EP trial that needed the
+// asyncify variant was reverted 2026-06-03 — it slowed the CPU path; see the
+// offscreen.js header note. If you re-trial webgpu, re-add the asyncify .{wasm,
+// mjs} and switch the import back to `onnxruntime-web/webgpu`.)
 const ortFiles = [
   'ort-wasm-simd-threaded.wasm',
   'ort-wasm-simd-threaded.mjs',

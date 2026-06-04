@@ -6,6 +6,13 @@ import { createC2pa } from 'c2pa';
 // (the jsep/asyncify/jspi variants are ~64M of dead weight, dropped for package
 // size), so the default bundle 404s on its wasm at runtime → InferenceSession
 // fails. The `/wasm` entry loads the plain artifact we actually ship.
+//
+// WebGPU EP was trialed for tier-5 OpenFake (2026-06-03) and REVERTED: routing
+// everything through the webgpu/asyncify bundle slowed the wasm CPU path (SynthID
+// jumped to ~12s/image on the asyncify build). The trial's timing instrumentation
+// is kept (per-model ep/prep/infer in the debug table) so CPU-path speed can be
+// measured; only the EP switch was rolled back. See CLAUDE.md "Things tried and
+// rejected" for the full write-up.
 import * as ort from 'onnxruntime-web/wasm';
 import { buildSynthIdInput, SYNTHID_SIZE } from './synthid-preprocess.js';
 
@@ -134,23 +141,30 @@ const SYNTHID_MODEL = {
   confidentThreshold: 0.85,
 };
 
+// Each map value resolves to { session, ep, loadMs }. `ep` is hard-coded 'wasm'
+// (we run the plain CPU bundle) and `loadMs` is the one-time session-load cost —
+// both surface in the debug table's timing row. Kept as a struct so the WebGPU
+// EP can be reintroduced here without touching call sites.
 const sessions = new Map();
+
+async function createSession(model) {
+  const t0 = performance.now();
+  const session = await ort.InferenceSession.create(model.url, {
+    executionProviders: ['wasm'],
+  });
+  const loadMs = performance.now() - t0;
+  dlog(`${TAG} ${model.name} ready (load ${loadMs.toFixed(0)}ms)`);
+  return { session, ep: 'wasm', loadMs };
+}
 
 function getSession(model) {
   if (!sessions.has(model.name)) {
     dlog(`${TAG} loading model ${model.name}`);
-    const promise = ort.InferenceSession.create(model.url, {
-      executionProviders: ['wasm'],
-    })
-      .then((s) => {
-        dlog(`${TAG} ${model.name} ready`);
-        return s;
-      })
-      .catch((e) => {
-        console.error(`${TAG} ${model.name} failed to load:`, e);
-        sessions.delete(model.name); // allow retry on next image
-        throw e;
-      });
+    const promise = createSession(model).catch((e) => {
+      console.error(`${TAG} ${model.name} failed to load:`, e);
+      sessions.delete(model.name); // allow retry on next image
+      throw e;
+    });
     sessions.set(model.name, promise);
   }
   return sessions.get(model.name);
@@ -181,16 +195,28 @@ function preprocessGlobal(bitmap, model) {
 async function runSingleModel(blob, model) {
   let bitmap;
   try {
-    const session = await getSession(model);
+    const { session, ep, loadMs } = await getSession(model);
     bitmap = await createImageBitmap(blob);
+    const tPre = performance.now();
     const tensor = preprocessGlobal(bitmap, model);
+    const tInfer = performance.now();
     const outputs = await session.run({ [model.inputName]: tensor });
+    const inferMs = performance.now() - tInfer;
+    const prepMs = tInfer - tPre;
     const probAI = model.interpret(outputs[model.outputName]);
+    dlog(
+      `${TAG} ${model.name} [${ep}] P(AI)=${(probAI * 100).toFixed(1)}% ` +
+      `(prep ${prepMs.toFixed(0)}ms, infer ${inferMs.toFixed(0)}ms)`,
+    );
     return {
       name: model.name,
       probAI,
       detected: probAI >= model.threshold,
       confident: probAI >= model.confidentThreshold,
+      ep,
+      prepMs,
+      inferMs,
+      loadMs,
     };
   } catch (e) {
     return { name: model.name, error: String(e?.message || e) };
@@ -237,16 +263,21 @@ async function handleSynthIdDetect(url) {
 
   let bitmap;
   try {
-    const session = await getSession(SYNTHID_MODEL);
+    const { session, loadMs } = await getSession(SYNTHID_MODEL);
     bitmap = await createImageBitmap(blob);
     const tPre = performance.now();
     const tensor = preprocessSynthId(bitmap);
     const tInfer = performance.now();
     const outputs = await session.run({ [SYNTHID_MODEL.inputName]: tensor });
+    const inferMs = performance.now() - tInfer;
+    const prepMs = tInfer - tPre;
     const probAI = outputs[SYNTHID_MODEL.outputName].data[0];
+    // prep here is the pure-JS db4 wavelet + FFT + carrier build (the part GPU
+    // wouldn't accelerate) — worth seeing split from infer in the debug table.
+    const timing = { prepMs, inferMs, loadMs };
     dlog(
       `${TAG} synthid P(watermark)=${(probAI * 100).toFixed(1)}% ` +
-      `(prep ${(tInfer - tPre).toFixed(0)}ms, infer ${(performance.now() - tInfer).toFixed(0)}ms, ` +
+      `(prep ${prepMs.toFixed(0)}ms, infer ${inferMs.toFixed(0)}ms, ` +
       `total ${(performance.now() - t0).toFixed(0)}ms)`,
     );
     const detail = `SynthID watermark P=${(probAI * 100).toFixed(1)}%`;
@@ -256,9 +287,10 @@ async function handleSynthIdDetect(url) {
         reason: 'synthid-watermark',
         detail,
         visualTier: probAI >= SYNTHID_MODEL.confidentThreshold ? 'high' : 'low',
+        timing,
       };
     }
-    return { ai: false, reason: 'synthid-below-threshold', detail };
+    return { ai: false, reason: 'synthid-below-threshold', detail, timing };
   } catch (e) {
     dwarn(`${TAG} synthid inference failed for`, url, e);
     return { ai: false, reason: 'synthid-error', detail: String(e?.message || e) };
@@ -326,12 +358,24 @@ async function handleVisualDetect(url) {
     .map((r) => (r.error ? `${r.name}=err: ${r.error}` : `${r.name}=${(r.probAI * 100).toFixed(1)}%`))
     .join('\n');
 
+  // Per-model EP + timing, surfaced for the debug table (background's
+  // summarizeVisual). Only the non-error fields are meaningful.
+  const models = results.map((r) => ({
+    name: r.name,
+    error: r.error,
+    probAI: r.probAI,
+    ep: r.ep,
+    prepMs: r.prepMs,
+    inferMs: r.inferMs,
+    loadMs: r.loadMs,
+  }));
+
   if (results.every((r) => r.error)) {
-    return { ai: false, reason: 'visual-all-models-errored', detail: summary };
+    return { ai: false, reason: 'visual-all-models-errored', detail: summary, models };
   }
 
   if (!results.some((r) => r.detected)) {
-    return { ai: false, reason: 'visual-below-threshold', detail: summary };
+    return { ai: false, reason: 'visual-below-threshold', detail: summary, models };
   }
 
   // "Probably AI" if any model crossed its confidentThreshold; "Maybe AI" otherwise.
@@ -340,6 +384,7 @@ async function handleVisualDetect(url) {
     reason: 'visual-classifier',
     detail: summary,
     visualTier: results.some((r) => r.confident) ? 'high' : 'low',
+    models,
   };
 }
 

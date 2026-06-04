@@ -54,7 +54,20 @@
       <div class="label-title">Debug mode</div>
       <div class="label-desc">
         Print detection logs to the page and service-worker consoles, and
-        show the rule + per-model score under each flagged image.
+        show the rule + per-tier scores under every scanned image. Runs all
+        tiers (including the slow watermark + visual models) on every image.
+      </div>
+    </span>
+  </label>
+
+  <label id="fastDebugLabel">
+    <input type="checkbox" id="fastDebug">
+    <span class="label-text">
+      <div class="label-title">Fast debug mode</div>
+      <div class="label-desc">
+        Still show the per-tier debug table, but stop at the first tier that
+        detects AI — exactly like normal scanning. Faster on image-heavy
+        feeds; tiers skipped by the short-circuit show “(not reached)”.
       </div>
     </span>
   </label>

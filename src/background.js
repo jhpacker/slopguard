@@ -6,12 +6,19 @@ const MAX_CACHE = 1000;
 const MAX_FETCH = 8 * 1024 * 1024;
 
 let debugMode = false;
+// Fast debug: still show the per-tier debug table, but short-circuit on the
+// first detecting tier exactly like the non-debug cascade (don't force-run the
+// expensive ONNX tiers just to fill the table). Only meaningful when debugMode
+// is on. See doDetect's `forceAllTiers`.
+let fastDebug = false;
 try {
-  chrome.storage?.local?.get({ debugMode: false }, (s) => {
+  chrome.storage?.local?.get({ debugMode: false, fastDebug: false }, (s) => {
     debugMode = !!(s && s.debugMode);
+    fastDebug = !!(s && s.fastDebug);
   });
   chrome.storage?.onChanged?.addListener((changes) => {
     if (changes.debugMode) debugMode = !!changes.debugMode.newValue;
+    if (changes.fastDebug) fastDebug = !!changes.fastDebug.newValue;
   });
 } catch (e) {
   console.warn(`${TAG} chrome.storage unavailable — reload the extension to pick up new permissions`, e);
@@ -115,10 +122,15 @@ async function doDetect(url) {
   // We ignore validation status; the manifest contents are what we trust.
   const c2paResult = await c2paDetect(url);
 
-  // Normal flow short-circuits on a C2PA AI hit without fetching bytes. In
-  // debug mode we want the full per-tier metadata picture for every image, so
-  // we fetch even when c2pa already flagged AI.
-  const bytes = (!c2paResult.ai || debugMode) ? await fetchBytes(url) : null;
+  // In *full* debug mode we run every tier so the table is complete even when an
+  // earlier tier already flagged AI. In *fast* debug mode we behave like the
+  // non-debug cascade (short-circuit on the first hit) and only show scores for
+  // the tiers that actually ran. forceAllTiers distinguishes the two.
+  const forceAllTiers = debugMode && !fastDebug;
+
+  // Normal/fast flow short-circuits on a C2PA AI hit without fetching bytes.
+  // Only full debug fetches the bytes anyway, to populate the metadata tiers.
+  const bytes = (!c2paResult.ai || forceAllTiers) ? await fetchBytes(url) : null;
 
   // Tier-4 SynthID watermark result, memoized. In debug mode we want its row
   // in the table for EVERY image — even ones an earlier tier already flagged —
@@ -134,11 +146,29 @@ async function doDetect(url) {
     return synthidResult;
   };
 
+  // Tier-5 visual (OpenFake) result, memoized the same way. In debug mode
+  // finalize forces it so its EP + timing row shows for EVERY image, even one
+  // an earlier tier already flagged; the normal tier-5 dispatch reuses this.
+  let visualResult;
+  let visualRan = false;
+  const getVisual = async () => {
+    if (!visualRan) {
+      visualRan = true;
+      visualResult = await visualDetect(url);
+    }
+    return visualResult;
+  };
+
   // In debug mode, every return path carries a compact per-tier summary
   // (metaChecks) that the content script renders on the image.
   const finalize = async (result) => {
     if (debugMode) {
-      result.metaChecks = await buildMetaChecks(bytes, c2paResult, await getSynthid());
+      // Full debug forces the ONNX tiers so their rows always appear. Fast debug
+      // uses only whatever the cascade actually ran (memoized) — unreached tiers
+      // stay undefined and render as "not run".
+      const sid = forceAllTiers ? await getSynthid() : synthidResult;
+      const vis = forceAllTiers ? await getVisual() : visualResult;
+      result.metaChecks = await buildMetaChecks(bytes, c2paResult, sid, vis);
     }
     return result;
   };
@@ -170,9 +200,9 @@ async function doDetect(url) {
   // out of VISUAL_MODELS. Currently re-enabled to TRIAL a single new model —
   // OpenFake SwinV2 (ComplexDataLab/OpenFakeDemo) — in isolation. If it
   // regresses to the same FP behavior, re-comment this dispatch.
-  const visualResult = await visualDetect(url);
-  if (visualResult?.ai) return finalize(visualResult);
-  return finalize(visualResult || byteResult);
+  const tier5 = await getVisual();
+  if (tier5?.ai) return finalize(tier5);
+  return finalize(tier5 || byteResult);
 
   // Tier 6 (LLM vision judge, Chrome built-in Gemini Nano) was removed: its
   // verdict was driven by prompt framing rather than the pixels, so it never
@@ -198,7 +228,7 @@ async function synthidDetect(url) {
     return result;
   } catch (e) {
     dwarn(`${TAG} synthid ✗ offscreen call failed in ${(performance.now() - t0).toFixed(0)}ms for`, url, e);
-    return { ai: false, reason: 'synthid-call-failed' };
+    return { ai: false, reason: 'synthid-call-failed', detail: String(e?.message || e) };
   }
 }
 
@@ -220,7 +250,7 @@ async function visualDetect(url) {
     return result;
   } catch (e) {
     dwarn(`${TAG} tier5 ✗ offscreen call failed in ${(performance.now() - t0).toFixed(0)}ms for`, url, e);
-    return { ai: false, reason: 'visual-call-failed' };
+    return { ai: false, reason: 'visual-call-failed', detail: String(e?.message || e) };
   }
 }
 
@@ -457,13 +487,22 @@ function summarizeSynthId(text, c2paResult) {
 
 // Tier-4 SynthID watermark surrogate result (the actual ONNX detection, not
 // metadata). `r` is the synthidDetect() result, or null if the tier didn't run.
+// Compact " · prep Nms · infer Nms[ · load Nms]" suffix for debug-table timing
+// rows. Shared by the SynthID-watermark and Visual summarizers so both read the
+// same. `load` (one-time session-load cost) only shows when non-trivial.
+function fmtTiming(t) {
+  if (!t || t.prepMs == null || t.inferMs == null) return '';
+  const load = (t.loadMs != null && t.loadMs >= 1) ? ` · load ${t.loadMs.toFixed(0)}ms` : '';
+  return ` · prep ${t.prepMs.toFixed(0)}ms · infer ${t.inferMs.toFixed(0)}ms${load}`;
+}
+
 function summarizeSynthIdWatermark(r) {
   if (!r) return { text: 'not run', status: 'clean' };
   switch (r.reason) {
     case 'synthid-watermark':
-      return { text: r.detail || 'watermark detected', status: 'ai' };
+      return { text: `${r.detail || 'watermark detected'}${fmtTiming(r.timing)}`, status: 'ai' };
     case 'synthid-below-threshold':
-      return { text: r.detail || 'below threshold', status: 'clean' };
+      return { text: `${r.detail || 'below threshold'}${fmtTiming(r.timing)}`, status: 'clean' };
     case 'synthid-fetch-failed':
     case 'synthid-fetch-error':
     case 'synthid-error':
@@ -475,20 +514,47 @@ function summarizeSynthIdWatermark(r) {
 }
 
 // Returns an array of { tier, text, status } rows for the debug table.
-async function buildMetaChecks(bytes, c2paResult, synthidResult) {
+async function buildMetaChecks(bytes, c2paResult, synthidResult, visualResult) {
   const lines = [{ tier: 'C2PA', ...summarizeC2pa(c2paResult) }];
   if (!bytes) {
-    lines.push({ tier: 'EXIF', text: '(fetch failed)', status: 'fail' });
-    lines.push({ tier: 'Bytes', text: '(fetch failed)', status: 'fail' });
+    // In fast debug a C2PA AI hit short-circuits before bytes are fetched, so the
+    // byte-backed tiers were never reached (not failed). Bytes are otherwise only
+    // null when the fetch genuinely failed.
+    const skipped = !!c2paResult.ai;
+    const text = skipped ? '(not reached)' : '(fetch failed)';
+    const status = skipped ? 'clean' : 'fail';
+    lines.push({ tier: 'EXIF', text, status });
+    lines.push({ tier: 'Bytes', text, status });
     lines.push({ tier: 'SynthID(meta)', ...summarizeSynthId('', c2paResult) });
     lines.push({ tier: 'SynthID(watermark)', ...summarizeSynthIdWatermark(synthidResult) });
+    lines.push({ tier: 'Visual', ...summarizeVisual(visualResult) });
     return lines;
   }
   lines.push({ tier: 'EXIF', ...(await summarizeExif(bytes)) });
   lines.push({ tier: 'Bytes', ...summarizeByteScan(bytes) });
   lines.push({ tier: 'SynthID(meta)', ...summarizeSynthId(decodeBytes(bytes), c2paResult) });
   lines.push({ tier: 'SynthID(watermark)', ...summarizeSynthIdWatermark(synthidResult) });
+  lines.push({ tier: 'Visual', ...summarizeVisual(visualResult) });
   return lines;
+}
+
+// Tier-5 (OpenFake SwinV2) debug row: P(AI), which EP backed the session, and
+// per-image prep/infer/load timing (see fmtTiming). Falls back gracefully if the
+// offscreen result predates timing.
+function summarizeVisual(visualResult) {
+  // null/undefined → the cascade never reached this tier (fast debug short-circuit),
+  // which is not a failure. An actual error is carried on the result object below.
+  if (!visualResult) return { text: '(not run)', status: 'clean' };
+  const m = visualResult.models?.[0];
+  if (!m || m.error) {
+    return { text: m?.error ? `error: ${m.error}` : '(no result)', status: 'fail' };
+  }
+  const ep = m.ep ? `[${m.ep}] ` : '';
+  const p = `P=${(m.probAI * 100).toFixed(1)}%`;
+  return {
+    text: `${m.name} ${ep}${p}${fmtTiming(m)}`.replace(/\s+/g, ' ').trim(),
+    status: visualResult.ai ? 'ai' : 'clean',
+  };
 }
 
 async function fetchBytes(url) {
