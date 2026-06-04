@@ -1,46 +1,39 @@
 # SlopGuard
 
-A Chrome extension that detects AI-generated images on web pages and visually flags them. Built as a personal experiment, not a polished product.
+An extension that detects most AI-generated images on web pages and visually flags them.
 
-When you click the toolbar icon (the six-finger hand icon) on any page, SlopGuard runs every eligible image (rendered area ≥ ~200×200 px) through a multi-tier detection pipeline. AI-flagged images get a red **AI** / **Probably AI** / yellow **Maybe AI** label and are dimmed to grayscale; checked-clean images get a thin green outline; failed checks get a grey outline.
+When you click the toolbar icon (the six-finger hand icon) on any page, SlopGuard runs every eligible image (rendered area ≥ ~200×200 px, images that are loaded on-screen) against a series of checks including:
+- Metadata extraction
+- Check for Google's SynthID invisible watermark
+- A visual classifier (i.e. a local model that says an image looks like AI)
 
-**Everything runs locally** — no remote API calls, no user-supplied keys. That's a deliberate constraint.
+You can also right-click on any image to check just that one image.
 
-The two on-device ONNX detectors are based upon others' work, so thanks are due to:
+AI-flagged images get a red **AI** / **Probably AI** / yellow **Maybe AI** label and are dimmed to grayscale; checked-clean images get a thin green outline; failed checks get a grey outline.
+
+**Everything runs locally** — no remote API calls, no user-supplied keys. This means it's fast and private.
+
+**Visual Identification of AI images is a best guess, there will be misses and false positives**
+
+The two on-device detectors are based upon others' work, so thanks are due to:
 **Victor Livernoche @ ComplexDataLab**'s [OpenFake](https://github.com/vicliv/OpenFake) project for the general classifier.
 
 **fyxme**'s [`fyxme/opensynthid-detect-0.1`](https://huggingface.co/fyxme/opensynthid-detect-0.1) local SynthID surrogate. 
 
-## Detection pipeline
+## HOW IT WORKS
 
-| # | Tier | What it checks | Status |
-|---|---|---|---|
-| 1 | **C2PA manifest** (c2pa-js, ignores cert validation) | `c2pa.actions(.v2)` assertions with a `digitalSourceType` of `trainedAlgorithmicMedia` etc., walking the **whole** manifest chain (the AI marker usually lives on an ingredient/parent manifest, not the active one) | ✅ active |
-| 2 | **EXIF/IPTC/XMP attribution** (exifr) | Artist / Author / Credit / Source values matching AI patterns (`"ai"`, `"AI Generated"`, etc.) | ✅ active |
-| 3 | **Byte scan** (regex over latin1-decoded bytes) | DigitalSourceType URL strings, known AI agent names (Midjourney, ChatGPT, Adobe_Firefly, Microsoft Responsible AI, Google C2PA, ...), generation params (`Sampler:`, `CFG scale:`, `civitai`, `ComfyUI`, `txt2img`, ...) | ✅ active |
-| 4 | **SynthID watermark surrogate** (OpenSynthID ONNX, onnxruntime-web) | The Google **SynthID** watermark directly in the pixels — a reverse-engineered surrogate ([`fyxme/opensynthid-detect-0.1`](https://huggingface.co/fyxme/opensynthid-detect-0.1)). Catches metadata-stripped Imagen / Gemini / Nano-Banana. ✅ active |
-| 4a | **Visible watermark template matching** | Was OpenCV-based NCC against `templates/`; OpenCV.js + MV3 CSP are incompatible, and the eval of an alternative NCC port found it redundant with tier 4. | ⚠️ disabled |
-| 5 | **Visual classifier** (OpenFake SwinV2 ONNX, onnxruntime-web) | General "does this look AI-generated" — a SwinV2 real/fake detector ([`ComplexDataLab/OpenFakeDemo`](https://huggingface.co/spaces/ComplexDataLab/OpenFakeDemo)) at 256×256. The original 3-model ensemble (Organika + 2× SigLIP) was disabled for real-world false positives; OpenFake is a single-model replacement on trial. | ✅ active |
+| # | Tier | What it checks |
+|---|---|---|
+| 1 | **C2PA manifest** (c2pa-js, ignores cert validation) | `c2pa.actions(.v2)` assertions with a `digitalSourceType` of `trainedAlgorithmicMedia` etc., walking the **whole** manifest chain (the AI marker usually lives on an ingredient/parent manifest, not the active one)|
+| 2 | **EXIF/IPTC/XMP attribution** (exifr) | Artist / Author / Credit / Source values matching AI patterns (`"ai"`, `"AI Generated"`, etc.)
+| 3 | **Byte scan** (regex over latin1-decoded bytes) | DigitalSourceType URL strings, known AI agent names (Midjourney, ChatGPT, Adobe_Firefly, Microsoft Responsible AI, Google C2PA, ...), generation params (`Sampler:`, `CFG scale:`, `civitai`, `ComfyUI`, `txt2img`, ...)|
+| 4 | **SynthID watermark surrogate** (OpenSynthID ONNX, onnxruntime-web) | The Google **SynthID** watermark directly in the pixels — a reverse-engineered surrogate ([`fyxme/opensynthid-detect-0.1`](https://huggingface.co/fyxme/opensynthid-detect-0.1)).|
+| 5 | **Visual classifier** (OpenFake SwinV2 ONNX, onnxruntime-web) | General "does this look AI-generated" — a SwinV2 real/fake detector ([`ComplexDataLab/OpenFakeDemo`](https://huggingface.co/spaces/ComplexDataLab/OpenFakeDemo)) at 256×256.|
 
 
-**Tiers 1–4 short-circuit on hit.** Tiers 1–3 are declared signals (the file literally claims it's AI); tier 4 reads the SynthID watermark, treated as strong provenance. All four produce the red **AI** label.
+**Tiers 1–4 short-circuit on hit.** Tiers 1 & 2 are declared signals (the file literally claims it's AI); tier 4 reads the SynthID watermark, treated as strong provenance. All four produce the red **AI** label.
 
 **Tier 5 fires when OpenFake crosses its detect threshold** → red **Probably AI** if it also crosses the confident threshold, otherwise yellow **Maybe AI**. A failure to evaluate gets a grey outline.
-
-## Install (unpacked, dev mode)
-
-```bash
-npm install
-npm run build
-```
-
-Then in Chrome:
-
-1. `chrome://extensions` → enable **Developer mode**
-2. Click **Load unpacked** → select this repo's directory
-3. Right-click the toolbar icon → **Options** → toggle **Debug mode** if you want verbose console logs and per-image rule/score on the overlays
-
-If you want to scan local `file://` pages, you also need to enable **Allow access to file URLs** on the extension's details page.
 
 ## Model weights
 
